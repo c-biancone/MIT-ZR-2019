@@ -1,5 +1,5 @@
 # MIT-ZR-2019
-Alliance "Pizza&amp;Bacon" code from the 2019 MIT Zero Robotics World Championships.
+Alliance "Pizza&amp;Bacon" code from the 2019 MIT Zero Robotics World Championships. It was written by teams Kühlschrank from Andover, NJ, BACON from Charlottesville, VA, and ZRighi from Napoli, Italy, and honed through both 2D and 3D simulations prior to the competition.
 
 Our alliance tied for second and eventually placed third after the tie-breaker.
 
