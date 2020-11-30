@@ -1,0 +1,234 @@
+//Begin page main
+#define ap 0.0035f
+#define ai 0.0f
+#define ad 0.0173f
+#define pp 0.28f
+#define pi 0.0f
+#define pd 3.935f
+
+float getDistance(float *a, float *b){
+  float vet[3];
+  mathVecSubtract(vet,b,a,3);
+  return mathVecMagnitude(vet,3);
+}
+
+float getAngleBetween(float *vectorA, float *vectorB){//return the angle between 2 vector
+  return acosf(mathVecInner(vectorA, vectorB, 3) / (mathVecMagnitude(vectorA, 3) * mathVecMagnitude(vectorB, 3)));
+}
+
+void scale(float *vector, float k){
+  for(int i=0;i<3;i++) vector[i]*=k;
+}
+
+bool isFacingPos(float myState[12], float lookPos[3], float tollerance, int valuePos){
+  float realPos[3];
+  mathVecSubtract(realPos, lookPos, myState, 3);
+  mathVecNormalize(realPos,3);
+  mathVecNormalize(myState+valuePos,3);
+  //DEBUG(("TEST: %f",acosf(mathVecInner(realPos, myState+valuePos, 3))));
+  return acosf(mathVecInner(realPos, myState+valuePos, 3))<tollerance;
+}
+
+float degToRad(float k){
+  return k*0.01745329251f;
+}
+//End page default functions
+//Begin page main
+/*______GAME COSTRAINTS______*/
+#define HOOKING 20
+#define HOOKING_ROT 21
+#define TARGET_DRAG 4
+#define defaultHook 0.17095f
+#define customHook .3385f //.34f
+
+/*______GAME VARIABLES_______*/
+float myState[12], targetState[12];
+
+//Hooking vars
+float otherHook[3], hookDist, whereHook[3];
+float quatRot, axisRot[3], newQuat[4], hookLoc[3];
+
+// Movement vars
+float whereToGo[3], kVel;
+float eulerRot[3];
+int _Phase;
+bool stopCalc;
+
+//New vars for ISS
+bool gameMode; //specify the mode we're playing
+bool isAligned; //check if we can go align with the red hook position
+float circleRay; //used to set the length of the vector
+void init(){
+  circleRay = 0.05f;
+
+  api.setControlMode(CTRL_PD,CTRL_PD);
+  api.setAttGains(ap, ai, ad);
+  api.setPosGains(pp, pi, pd);
+
+  axisRot[0] = 1.0f;
+  axisRot[1] = axisRot[2] = 0.0f;
+
+  hookDist = customHook;
+  isAligned = gameMode = stopCalc = false;
+  _Phase = HOOKING;
+
+  //default whereToGo
+  whereToGo[0] = whereToGo[1] = whereToGo[2] = 0.0f;
+  hookDist = 0.33f;
+}
+
+void loop(){
+  float refVec[3] = {-1, 0, 0};
+  api.getMyZRState(myState);
+  api.getOtherZRState(targetState);
+
+  //if the red sphere stay on the Y axis, it means we are in champion mode
+  gameMode = (fabs(targetState[0])+fabs(targetState[2]))<0.1f;
+  DEBUG(("GameMode: %d", gameMode));
+
+  //Calcolo posizione hook rosso e blu
+  for(int i=0;i<3;i++){
+    otherHook[i] = targetState[i+6];
+  }
+
+  mathVecNormalize(otherHook, 3);
+
+  for(int i=0;i<3;i++){
+    otherHook[i] *= hookDist;
+  }
+
+  mathVecAdd(otherHook,otherHook,targetState,3);
+
+  if(_Phase!=TARGET_DRAG){
+    if(myState[1]>0.2f)
+    kVel = 0.045f;
+    else
+    kVel = 0.065f;
+  }else{
+    kVel = 0.065f;
+  }
+
+  if(_Phase == HOOKING){
+    //THE WHERE TO GO TARGET IS SET TO THE HOOKPOS + SOME DISTANCE (THE MAXIMUM DISTANCE should be 3.1709f)
+    float a[12], b[12];
+    game.getOtherEulerState(a);
+    game.getMyEulerState(b);
+
+    float delay = (!gameMode?0.0f:-0.5f);
+    quatRot = (-a[6]+delay)/2;
+    float baseQuat[4];
+    baseQuat[0] = axisRot[0]*sinf(quatRot);
+    baseQuat[1] = axisRot[1]*sinf(quatRot);
+    baseQuat[2] = axisRot[2]*sinf(quatRot);
+    baseQuat[3] = cosf(quatRot);
+
+    float vec2Loc[3];
+    scale(targetState+6, 0.17095f);
+    mathVecAdd(hookLoc, targetState, targetState+6, 3);
+    mathVecSubtract(vec2Loc, hookLoc, targetState, 3);
+    api.attVec2Quat(refVec, vec2Loc, baseQuat, newQuat);
+
+    api.setQuatTarget(newQuat);
+
+    if(!gameMode){ //if normal mode
+      if(!stopCalc){
+        float ananas[3] = {0.0f, otherHook[1], 0.0f}, newPos[3];
+        mathVecSubtract(newPos,otherHook,ananas,3);
+        float lunghezza=mathVecMagnitude(newPos,3);
+        mathVecNormalize(newPos, 3);
+        for(int i=0;i<3;i++){
+          newPos[i] = (lunghezza-0.02f)*newPos[i];// PI, -0.035
+        }
+        mathVecAdd(newPos,newPos,ananas,3);
+        memcpy(whereToGo, newPos,sizeof(float)*3);
+        if(getDistance(myState, whereToGo)<0.015f){
+          stopCalc = true;
+        }
+      }else{
+        memcpy(whereToGo, otherHook, sizeof(float)*3);
+        _Phase = 100;
+      }
+    }else{//is champion mode
+      //DEBUG(("Attitude: x=%f y=%f z=%f", targetState[6], targetState[7], targetState[8]));
+      //DEBUG(("Euler: x=%f y=%f z=%f", a[6], a[7], a[8]));
+
+      //we create an vector {0,0,0.05}
+      float relHookPos[3], alpha = -a[6]+1.0f, vec[3] = {0.0f, 0.0f, circleRay};
+      relHookPos[0] = (vec[0]*cosf(alpha) - vec[2]*sinf(alpha));//*val;
+      relHookPos[1] = 0.0f;
+      relHookPos[2] = (vec[0]*sinf(alpha) + vec[2]*cosf(alpha));
+
+      //we add that vector to the position of the red sphere
+      mathVecAdd(relHookPos, relHookPos, otherHook, 3);
+
+      //we copy that point into whereToGo
+      memcpy(whereToGo, relHookPos, sizeof(float)*3);
+
+      //once we get close to the whereToGo
+      if(getDistance(myState, whereToGo)<0.05f){
+        //if we have to get aligned, get near the red hookPos
+        if(!isAligned){
+          circleRay = 0.0f;
+          isAligned = true;
+        }else{ //if we already are aligned, we get close to the red HookPos center
+          hookDist = 0.34f;
+        }
+      }
+      if(game.getGamePhase()==4){
+        _Phase = TARGET_DRAG;
+      }
+    }
+
+    eulerRot[0] = -a[6];
+    eulerRot[1] = -a[7];
+    eulerRot[2] = b[8];
+  }
+  if(_Phase == 100){
+    // DEBUG(("Start euler"));
+    kVel=0.02f;
+    hookDist = customHook;
+    memcpy(whereToGo, otherHook, sizeof(float)*3);
+    game.setEulerTarget(eulerRot);
+    if(game.getGamePhase()==4){
+      _Phase = TARGET_DRAG;
+    }
+  }
+
+  if(_Phase == TARGET_DRAG){
+    // DEBUG(("Trying to tow the red spheres"));
+    whereToGo[0] = 0.0;
+    whereToGo[1] = 5.0f;
+    whereToGo[2] = myState[2];
+    kVel = 0.001f;
+    if(myState[1]>0.1f){
+      //float att[3] = {myState[0], myState[1], 1.0f};
+      // float att[3] = {1.0f, 0.0f, 0.0f};
+      float att[3] = {1.0f, 1.0f, 0.0f};
+      //mathVecSubtract(att, att, myState, 3);
+      mathVecNormalize(att, 3);
+      api.setAttitudeTarget(att);
+      whereToGo[0] = myState[0];
+      whereToGo[1] = 2.0f;//.6f -- 10.0f
+      whereToGo[2] = -5.8f;
+    }
+  }
+
+  float distance = getDistance(myState, whereToGo);
+  float velocity = (distance*0.13984f)*(0.07f/kVel);
+  if(velocity>0.08f) velocity = 0.08f;
+
+  float vet[3];
+  mathVecSubtract(vet,whereToGo,myState,3);
+  mathVecNormalize(vet,3);
+  for(int i=0;i<3;i++)vet[i]*=velocity;
+
+  api.setVelocityTarget(vet);
+
+  if(distance < 0.005f) {
+    api.setPositionTarget(whereToGo);
+    // DEBUG(("USING SET POSITION TARGET"));
+  }
+
+}
+
+//End page main
